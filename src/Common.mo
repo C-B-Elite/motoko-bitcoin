@@ -1,8 +1,10 @@
 import Nat8 "mo:base/Nat8";
+import Nat16 "mo:base/Nat16";
 import Nat32 "mo:base/Nat32";
 import Nat64 "mo:base/Nat64";
 import Iter "mo:base/Iter";
 import Text "mo:base/Text";
+import Array  "mo:base/Array";
 
 module {
   // Read big endian 32-bit natural number starting at offset.
@@ -81,28 +83,31 @@ module {
       Nat32.fromIntWrap(Nat8.toNat(bytes[offset + 0]));
   };
 
+  // Write given value as 16-bit little endian into array starting at offset.
+  public func writeLE16(bytes : [var Nat8], offset : Nat, value : Nat16) {
+    let first : Nat8 = Nat8.fromIntWrap(Nat16.toNat(value));
+    let second : Nat8 = Nat8.fromIntWrap(Nat16.toNat(value >> 8));
+
+    bytes[offset] := first;
+    bytes[offset + 1] := second;
+  };
+
   // Write given value as 32-bit little endian into array starting at offset.
   public func writeLE32(bytes : [var Nat8], offset : Nat, value : Nat32) {
-    bytes[offset + 3] := Nat8.fromNat(Nat32.toNat((value & 0xFF000000) >> 24));
-    bytes[offset + 2] := Nat8.fromNat(Nat32.toNat((value & 0xFF0000) >> 16));
-    bytes[offset + 1] := Nat8.fromNat(Nat32.toNat((value & 0xFF00) >> 8));
-    bytes[offset] := Nat8.fromNat(Nat32.toNat((value & 0xFF)));
+    let first : Nat16 = Nat16.fromIntWrap(Nat32.toNat(value));
+    let second : Nat16 = Nat16.fromIntWrap(Nat32.toNat(value >> 16));
+
+    writeLE16(bytes, offset, first);
+    writeLE16(bytes, offset + 2, second);
   };
 
   // Write given value as 64-bit little endian into array starting at offset.
   public func writeLE64(bytes : [var Nat8], offset : Nat, value : Nat64) {
-    bytes[offset + 7] :=
-      Nat8.fromNat(Nat64.toNat((value & 0xFF00000000000000) >> 56));
-    bytes[offset + 6] :=
-      Nat8.fromNat(Nat64.toNat((value & 0xFF000000000000) >> 48));
-    bytes[offset + 5] :=
-      Nat8.fromNat(Nat64.toNat((value & 0xFF0000000000) >> 40));
-    bytes[offset + 4] :=
-      Nat8.fromNat(Nat64.toNat((value & 0xFF00000000) >> 32));
-    bytes[offset + 3] := Nat8.fromNat(Nat64.toNat((value & 0xFF000000) >> 24));
-    bytes[offset + 2] := Nat8.fromNat(Nat64.toNat((value & 0xFF0000) >> 16));
-    bytes[offset + 1] := Nat8.fromNat(Nat64.toNat((value & 0xFF00) >> 8));
-    bytes[offset] := Nat8.fromNat(Nat64.toNat((value & 0xFF)));
+    let first : Nat32 = Nat32.fromIntWrap(Nat64.toNat(value));
+    let second : Nat32 = Nat32.fromIntWrap(Nat64.toNat(value >> 32));
+
+    writeLE32(bytes, offset, first);
+    writeLE32(bytes, offset + 4, second);
   };
 
   // Copy data from src into dest from/at the given offsets.
@@ -127,5 +132,25 @@ module {
     };
 
     return ?result;
+  };
+
+  public func encodeVarint(value : Nat) : [Nat8] {
+    assert(value < 0x10000000000000000);
+
+    return if (value < 0xfd) {
+      [Nat8.fromIntWrap(value)]
+    } else if (value < 0x10000) {
+      let result = Array.init<Nat8>(3, 0xfd);
+      writeLE16(result, 1, Nat16.fromIntWrap(value));
+      Array.freeze(result)
+    } else if (value < 0x100000000) {
+      let result = Array.init<Nat8>(5, 0xfe);
+      writeLE32(result, 1, Nat32.fromIntWrap(value));
+      Array.freeze(result)
+    } else {
+      let result = Array.init<Nat8>(9, 0xff);
+      writeLE64(result, 1, Nat64.fromIntWrap(value));
+      Array.freeze(result)
+    };
   };
 };
