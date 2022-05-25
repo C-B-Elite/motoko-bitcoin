@@ -27,5 +27,11 @@ module {
   public type SighashType = Nat32;
   public let SIGHASH_ALL : SighashType = 0x01;
 
+  public type BitcoinPrivateKey = {
+    network : Network;
+    key : Nat;
+    compressedPublicKey : Bool;
+  };
+
   public type P2PkhAddress = Text;
 };
