@@ -26,6 +26,9 @@ module {
 
   public type SighashType = Nat32;
   public let SIGHASH_ALL : SighashType = 0x01;
+  public let SIGHASH_NONE : SighashType = 0x02;
+  public let SIGHASH_SINGLE : SighashType = 0x03;
+  public let SIGHASH_ANYONECANPAY : SighashType = 0x80;
 
   public type BitcoinPrivateKey = {
     network : Network;

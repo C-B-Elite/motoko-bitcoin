@@ -1,4 +1,6 @@
 import Transaction "../../src/bitcoin/Transaction";
+import TxInput "../../src/bitcoin/TxInput";
+import TxOutput "../../src/bitcoin/TxOutput";
 import P2pkh "../../src/bitcoin/P2pkh";
 import PublicKey "../../src/ecdsa/Publickey";
 import Curves "../../src/ec/Curves";
@@ -7,7 +9,7 @@ import Debug "mo:base/Debug";
 import Array "mo:base/Array";
 import Blob "mo:base/Blob";
 
-type TxIn = {
+type TxInput = {
   txid : [Nat8];
   vout : Nat32;
   seq : Nat32;
@@ -15,31 +17,31 @@ type TxIn = {
   publicKey : [Nat8]
 };
 
-type TxOut = {amount : Nat64; publicKey : [Nat8]};
+type TxOutput = {amount : Nat64; publicKey : [Nat8]};
 
 type TransactionTestCase = {
   version : Nat32;
-  txIns : [TxIn];
-  txOuts : [TxOut];
+  txIns : [TxInput];
+  txOuts : [TxOutput];
   expectedBytes : [Nat8];
   expectedId : [Nat8];
 };
 
 func makeTransaction(testCase : TransactionTestCase) : Transaction.Transaction {
-  let txIns = Array.map<TxIn, Transaction.TxIn>(testCase.txIns,
-    func (input : TxIn) {
-      let tx = Transaction.TxIn(
+  let txIns = Array.map<TxInput, TxInput.TxInput>(testCase.txIns,
+    func (input : TxInput) {
+      let tx = TxInput.TxInput(
         {txid = Blob.fromArray(input.txid); vout = input.vout}, input.seq);
       tx.script := [#data(input.sigder), #data(input.publicKey)];
       tx
     });
-  let txOuts = Array.map<TxOut, Transaction.TxOut>(testCase.txOuts,
-    func (output : TxOut) {
+  let txOuts = Array.map<TxOutput, TxOutput.TxOutput>(testCase.txOuts,
+    func (output : TxOutput) {
       switch (PublicKey.decode(#sec1 (output.publicKey, Curves.secp256k1))) {
         case (#ok pk) {
           switch (P2pkh.makeScript(P2pkh.deriveAddress(#Bitcoin, pk))) {
             case (#ok script) {
-              Transaction.TxOut(output.amount, script)
+              TxOutput.TxOutput(output.amount, script)
             };
             case (#err msg) {
               Debug.trap(msg)
@@ -51,7 +53,7 @@ func makeTransaction(testCase : TransactionTestCase) : Transaction.Transaction {
         };
       };
     });
-  return Transaction.Transaction(testCase.version, txIns, txOuts);
+  return Transaction.Transaction(testCase.version, txIns, txOuts, 0);
 };
 
 let transactionTestCases : [TransactionTestCase] = [{

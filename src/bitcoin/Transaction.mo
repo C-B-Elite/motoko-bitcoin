@@ -1,81 +1,98 @@
 import Array "mo:base/Array";
+import Buffer "mo:base/Buffer";
 import Iter "mo:base/Iter";
 import Nat32 "mo:base/Nat32";
 import Blob "mo:base/Blob";
+import Result "mo:base/Result";
 import Hash "../Hash";
 import Script "./Script";
 import Common "../Common";
+import ByteUtils "../ByteUtils";
 import Types "./Types";
+import TxInput "./TxInput";
+import TxOutput "./TxOutput";
 
 module {
-  // Representation of a TxIn of a Bitcoin transaction. A TxIn is linked to a
-  // previous transaction output given by prevOutput.
-  public class TxIn(prevOutput : Types.OutPoint, sequence : Nat32) {
+  // Deserialize transaction from data with the following layout:
+  // | version | len(txIns) | txIns | len(txOuts) | txOuts | locktime |
+  public func fromBytes(data : Iter.Iter<Nat8>)
+    : Result.Result<Transaction, Text> {
 
-    // Unlocking script. This is mutuable to enable signature hash construction
-    // for a transaction without having to clone the transaction.
-    public var script : Script.Script = [];
-
-    // Serialize to bytes with layout:
-    // | prevTxId | prevTx output index | script | sequence |.
-    public func toBytes() : [Nat8] {
-      let encodedScript = Script.toBytes(script);
-      // Total size based on output layout.
-      let totalSize = 32 + 4 + encodedScript.size() + 4;
-      let output = Array.init<Nat8>(totalSize, 0);
-      var outputOffset = 0;
-
-      let prevTxId = Blob.toArray(prevOutput.txid);
-      let reversedPrevTxid = Array.tabulate<Nat8>(32, func (n : Nat) {
-        prevTxId[prevTxId.size() - 1 - n];
-      });
-
-      // Write prevTxId.
-      Common.copy(output, outputOffset, reversedPrevTxid, 0, 32);
-      outputOffset += 32;
-
-      // Write prevTx output index.
-      Common.writeLE32(output, outputOffset, prevOutput.vout);
-      outputOffset += 4;
-
-      // Write script.
-      Common.copy(output, outputOffset, encodedScript, 0, encodedScript.size());
-      outputOffset += encodedScript.size();
-
-      // Write sequence.
-      Common.writeLE32(output, outputOffset, sequence);
-      outputOffset += 4;
-
-      assert(outputOffset == output.size());
-      return Array.freeze(output);
+    // Read version and number of transaction inputs.
+    let (version, txInSize) = switch (
+      ByteUtils.readLE32(data),
+      ByteUtils.readVarint(data)
+    ) {
+      case (?version, ?txInSize) {
+        (version, txInSize)
+      };
+      case (null, _) {
+        return #err ("Could not read version.");
+      };
+      case (_, null) {
+        return #err ("Could not read TxInputs size.");
+      };
     };
-  };
 
-  // Representation of a TxOut of a Bitcoin transaction. A TxOut locks
-  // specified amount with the given script.
-  public class TxOut(amount : Types.Satoshi, scriptPubKey : Script.Script) {
-
-    // Serialize to bytes with layout: | amount | serialized script |.
-    public func toBytes() : [Nat8] {
-      let encodedScript = Script.toBytes(scriptPubKey);
-      let totalSize = 8 + encodedScript.size();
-      let output = Array.init<Nat8>(totalSize, 0);
-
-      Common.writeLE64(output, 0, amount);
-      Common.copy(output, 8, encodedScript, 0, encodedScript.size());
-
-      return Array.freeze(output);
+    // Read transaction inputs.
+    let txInputs = Buffer.Buffer<TxInput.TxInput>(txInSize);
+    for (_ in Iter.range(0, txInSize - 1)) {
+      switch (TxInput.fromBytes(data)) {
+        case (#ok txIn) {
+          txInputs.add(txIn);
+        };
+        case (#err (msg)) {
+          return #err ("Could not deserialize TxInput: " # msg);
+        };
+      };
     };
+
+    // Read number of transaction outputs.
+    let txOutSize = switch (ByteUtils.readVarint(data)) {
+      case (?txOutSize) {
+        txOutSize;
+      };
+      case _ {
+        return #err ("Could not read TxOutputs size.");
+      };
+    };
+
+    // Read transaction outputs.
+    let txOutputs = Buffer.Buffer<TxOutput.TxOutput>(txOutSize);
+    for (_ in Iter.range(0, txOutSize - 1)) {
+      switch (TxOutput.fromBytes(data)) {
+        case (#ok txOut) {
+          txOutputs.add(txOut);
+        };
+        case (#err (msg)) {
+          return #err ("Could not deserialize TxOutput: " # msg);
+        };
+      };
+    };
+
+    // Read transaction locktime.
+    let locktime : Nat32 = switch (ByteUtils.readLE32(data)) {
+      case (?locktime) {
+        locktime
+      };
+      case _ {
+        return #err ("Could not read locktime.");
+      };
+    };
+
+    return #ok (Transaction(
+      version, txInputs.toArray(), txOutputs.toArray(), locktime));
   };
 
   // Representation of a Bitcoin transaction.
-  public class Transaction(version : Nat32, _txIns : [TxIn],
-    _txOuts : [TxOut]) {
+  public class Transaction(version : Nat32, _txIns : [TxInput.TxInput],
+    _txOuts : [TxOutput.TxOutput], locktime : Nat32) {
 
-    public let txIns = _txIns;
-    public let txOuts = _txOuts;
+    public let txInputs : [TxInput.TxInput] = _txIns;
+    public let txOutputs : [TxOutput.TxOutput] = _txOuts;
 
-    // Compute the transaction hash.
+    // Compute the transaction double hashing the transaction and reversing the
+    // output.
     public func id() : [Nat8] {
      let doubleHash : [Nat8] = Hash.doubleSHA256(toBytes());
      return Array.tabulate<Nat8>(doubleHash.size(),
@@ -87,22 +104,28 @@ module {
 
     // Create a signature hash for the given TxIn index.
     // Only SIGHASH_ALL is currently supported.
-    // Output layout: | Tx data | SighashType |.
+    // Output layout: | Tx data | SighashType |
     public func createSignatureHash(scriptPubKey : Script.Script,
-      txInIndex : Nat32, sigHashType : Types.SighashType) : [Nat8] {
-      assert(sigHashType == Types.SIGHASH_ALL);
+      txInputIndex : Nat32, sigHashType : Types.SighashType) : [Nat8] {
+      let sighashMask : Nat32 = sigHashType & 0x1f;
+      assert(sighashMask != Types.SIGHASH_SINGLE);
+      assert(sighashMask != Types.SIGHASH_NONE);
+      assert(sigHashType & Types.SIGHASH_ANYONECANPAY == 0);
 
-      // Clear scripts for other TxIns.
-      for (i in Iter.range(0, txIns.size() - 1)) {
-        txIns[i].script := [];
+      // Clear scripts for other TxInputs.
+      for (i in Iter.range(0, txInputs.size() - 1)) {
+        txInputs[i].script := [];
       };
 
       // Set script for current TxIn to given scriptPubKey.
-      txIns[Nat32.toNat(txInIndex)].script := scriptPubKey;
+      txInputs[Nat32.toNat(txInputIndex)].script :=
+        Array.filter<Script.Instruction>(scriptPubKey, func (instruction) {
+          instruction != #opcode (#OP_CODESEPARATOR)
+        });
 
       // Serialize transaction and append SighashType.
-      let txData =  toBytes();
-      let output = Array.init<Nat8>(txData.size() + 4, 0);
+      let txData : [Nat8] = toBytes();
+      let output : [var Nat8] = Array.init<Nat8>(txData.size() + 4, 0);
 
       Common.copy(output, 0, txData, 0, txData.size());
       Common.writeLE32(output, txData.size(), sigHashType);
@@ -111,65 +134,73 @@ module {
     };
 
     // Serialize transaction to bytes with layout:
-    // | version | len(txIns) | txIns | len(txOuts) | txOuts | locktime |.
+    // | version | len(txIns) | txIns | len(txOuts) | txOuts | locktime |
     public func toBytes() : [Nat8] {
 
-      // Serialize TxIns to bytes.
-      let serializedTxIns : [[Nat8]] = Array.map<TxIn, [Nat8]>(txIns,
-        func (txIn) {
-          txIn.toBytes();
+      // Serialize TxInputs to bytes.
+      let serializedTxIns : [[Nat8]] = Array.map<TxInput.TxInput, [Nat8]>(
+        txInputs, func (txInput) {
+          txInput.toBytes();
         });
 
-      // Serialize TxOuts to bytes.
-      let serializedTxOuts : [[Nat8]] = Array.map<TxOut, [Nat8]>(txOuts,
-        func (txOut) {
-          txOut.toBytes();
+      // Serialize TxOutputs to bytes.
+      let serializedTxOuts : [[Nat8]] = Array.map<TxOutput.TxOutput, [Nat8]>(
+        txOutputs, func (txOutput) {
+          txOutput.toBytes();
         });
 
-      // Encodes the sizes of TxIns and TxOuts as varint.
-      let serializedTxInSize : [Nat8] = Common.encodeVarint(txIns.size());
-      let serializedTxOutSize : [Nat8] = Common.encodeVarint(txOuts.size());
+      // Encode the sizes of TxIns and TxOuts as varint.
+      let serializedTxInSize : [Nat8] = ByteUtils.writeVarint(txInputs.size());
+      let serializedTxOutSize : [Nat8] = ByteUtils.writeVarint(
+        txOutputs.size());
 
-      // Compute total size of all serialized TxIns.
+      // Compute total size of all serialized TxInputs.
       let totalTxInSize : Nat = Array.foldLeft<[Nat8], Nat>(
         serializedTxIns, 0, func (total : Nat, serializedTxIn : [Nat8]) {
           total + serializedTxIn.size();
         });
 
-      // Compute total size of all serialized TxOuts.
+      // Compute total size of all serialized TxOutputs.
       let totalTxOutSize : Nat = Array.foldLeft<[Nat8], Nat>(
         serializedTxOuts, 0, func (total : Nat, serializedTxOut : [Nat8]) {
           total + serializedTxOut.size();
         });
 
-      // Total size of output is excluding sigHashType.
-      let totalSize = 4 + serializedTxInSize.size() + totalTxInSize +
-        serializedTxOutSize.size() + totalTxOutSize + 4;
+      // Total size of output excluding sigHashType.
+      let totalSize : Nat =
+        // 4 bytes for version.
+        4
+        + serializedTxInSize.size()
+        + totalTxInSize
+        + serializedTxOutSize.size()
+        + totalTxOutSize
+        // 4 bytes for locktime.
+        + 4;
       let output = Array.init<Nat8>(totalSize, 0);
       var outputOffset = 0;
 
-      // Write version
+      // Write version.
       Common.writeLE32(output, outputOffset, version);
       outputOffset += 4;
 
-      // Write TxIns size.
+      // Write TxInputs size.
       Common.copy(output, outputOffset, serializedTxInSize, 0,
         serializedTxInSize.size());
       outputOffset += serializedTxInSize.size();
 
-      // Write serialized TxIns.
+      // Write serialized TxInputs.
       for (serializedTxIn in serializedTxIns.vals()) {
         Common.copy(output, outputOffset, serializedTxIn, 0,
           serializedTxIn.size());
         outputOffset += serializedTxIn.size();
       };
 
-      // Write TxOuts size.
+      // Write TxOutputs size.
       Common.copy(output, outputOffset, serializedTxOutSize, 0,
         serializedTxOutSize.size());
       outputOffset += serializedTxOutSize.size();
 
-      // Write serialized TxIns.
+      // Write serialized TxOutputs.
       for (serializedTxOut in serializedTxOuts.vals()) {
         Common.copy(output, outputOffset, serializedTxOut, 0,
           serializedTxOut.size());
@@ -177,7 +208,7 @@ module {
       };
 
       // Write locktime.
-      Common.writeLE32(output, outputOffset, 0);
+      Common.writeLE32(output, outputOffset, locktime);
       outputOffset += 4;
 
       assert(outputOffset == output.size());
