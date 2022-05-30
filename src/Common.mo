@@ -133,24 +133,4 @@ module {
 
     return ?result;
   };
-
-  public func encodeVarint(value : Nat) : [Nat8] {
-    assert(value < 0x10000000000000000);
-
-    return if (value < 0xfd) {
-      [Nat8.fromIntWrap(value)]
-    } else if (value < 0x10000) {
-      let result = Array.init<Nat8>(3, 0xfd);
-      writeLE16(result, 1, Nat16.fromIntWrap(value));
-      Array.freeze(result)
-    } else if (value < 0x100000000) {
-      let result = Array.init<Nat8>(5, 0xfe);
-      writeLE32(result, 1, Nat32.fromIntWrap(value));
-      Array.freeze(result)
-    } else {
-      let result = Array.init<Nat8>(9, 0xff);
-      writeLE64(result, 1, Nat64.fromIntWrap(value));
-      Array.freeze(result)
-    };
-  };
 };
