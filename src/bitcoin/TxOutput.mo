@@ -25,7 +25,7 @@ module {
   };
 
   // Representation of a TxOutput of a Bitcoin transaction. A TxOutput locks
-  // specified amount of Satoshi with the given script.
+  // the specified amount of Satoshi with the given script.
   public class TxOutput(amount : Types.Satoshi, scriptPubKey : Script.Script) {
 
     // Serialize to bytes with layout: | amount | serialized script |

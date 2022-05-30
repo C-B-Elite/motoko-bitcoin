@@ -10,9 +10,6 @@ import Debug "mo:base/Debug";
 import Result "mo:base/Result";
 
 module Script {
-  let maxNat8 = 0xff;
-  let maxNat16 = 0xffff;
-  let maxNat32 = 0xffffffff;
   // Full set of opcodes from Bitcoin Core 23.0.
   // Not all opcodes are supported: see encodeOpcode and decodeOpcode.
   public type Opcode = {
@@ -593,17 +590,17 @@ module Script {
         case (#data data) {
           if (data.size() < opPushData1) {
             buf.add(Nat8.fromIntWrap(data.size()));
-          } else if (data.size() <= maxNat8) {
+          } else if (data.size() <= ByteUtils.maxNat8) {
             // Data for OP_PUSHDATA1.
             buf.add(Nat8.fromIntWrap(data.size()));
-          } else if (data.size() <= maxNat16) {
+          } else if (data.size() <= ByteUtils.maxNat16) {
             // Data for OP_PUSHDATA2.
             let sizeData = Array.init<Nat8>(2, 0);
             Common.writeLE16(sizeData, 0, Nat16.fromIntWrap(data.size()));
             for (item in sizeData.vals()) {
               buf.add(item);
             };
-          } else if (data.size() <= maxNat32) {
+          } else if (data.size() <= ByteUtils.maxNat32) {
             // Data for OP_PUSHDATA4.
             let sizeData = Array.init<Nat8>(4, 0);
             Common.writeLE32(sizeData, 0, Nat32.fromIntWrap(data.size()));

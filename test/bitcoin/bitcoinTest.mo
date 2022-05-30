@@ -19,6 +19,7 @@ let wallet = {
 };
 
 do {
+  Debug.print("Bitcoin");
   // Create Transaction inputs.
   let txIn1 = TxInput.TxInput({
     txid = Blob.fromArray([

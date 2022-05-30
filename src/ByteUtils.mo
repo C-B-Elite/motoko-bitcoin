@@ -7,6 +7,14 @@ import Array "mo:base/Array";
 import Common "./Common";
 
 module {
+  public let maxNat8 : Nat = 0xff;
+  public let maxNat16 : Nat = 0xffff;
+  public let maxNat32 : Nat = 0xffffffff;
+  public let maxNat64 : Nat = 0xffffffffffffffff;
+  let varintNat16Flag : Nat8 = 0xfd;
+  let varintNat32Flag : Nat8 = 0xfe;
+  let varintNat64Flag : Nat8 = 0xff;
+
   // Read a number of elements from the given iterator and return as array. If
   // reverse is true, will read return the elements in reverse order.
   // Returns null if the iterator does not produce enough data.
@@ -90,39 +98,39 @@ module {
   // Returns null if the iterator does not produce enough data.
   public func readVarint(data : Iter.Iter<Nat8>) : ?Nat {
     return (do ? {
-      switch (readOne(data)!) {
-        case 0xfd {
-          Nat16.toNat(readLE16(data)!)
-        };
-        case 0xfe {
-          Nat32.toNat(readLE32(data)!)
-        };
-        case 0xff {
-          Nat64.toNat(readLE64(data)!)
-        };
-        case (length) {
-          Nat8.toNat(length)
-        };
+      let flag : Nat8 = readOne(data)!;
+      if (flag == varintNat16Flag) {
+        Nat16.toNat(readLE16(data)!)
+      } else if (flag == varintNat32Flag) {
+        Nat32.toNat(readLE32(data)!)
+      } else if (flag == varintNat64Flag) {
+        Nat64.toNat(readLE64(data)!)
+      } else {
+        Nat8.toNat(flag)
       };
     });
   };
 
   // Encode value as varint.
   public func writeVarint(value : Nat) : [Nat8] {
-    assert(value < 0x10000000000000000);
+    assert(value <= maxNat64);
 
-    return if (value < 0xfd) {
+    return if (value < Nat8.toNat(varintNat16Flag)) {
+      // Output the value without flags.
       [Nat8.fromIntWrap(value)]
-    } else if (value < 0x10000) {
-      let result = Array.init<Nat8>(3, 0xfd);
+    } else if (value <= maxNat16) {
+      // Output Nat16 flag + serialized 2 bytes.
+      let result = Array.init<Nat8>(3, varintNat16Flag);
       Common.writeLE16(result, 1, Nat16.fromIntWrap(value));
       Array.freeze(result)
-    } else if (value < 0x100000000) {
-      let result = Array.init<Nat8>(5, 0xfe);
+    } else if (value <= maxNat32) {
+      // Output Nat32 flag + serialized 4 bytes.
+      let result = Array.init<Nat8>(5, varintNat32Flag);
       Common.writeLE32(result, 1, Nat32.fromIntWrap(value));
       Array.freeze(result)
     } else {
-      let result = Array.init<Nat8>(9, 0xff);
+      // Output Nat64 flag + serialized 8 bytes.
+      let result = Array.init<Nat8>(9, varintNat64Flag);
       Common.writeLE64(result, 1, Nat64.fromIntWrap(value));
       Array.freeze(result)
     };

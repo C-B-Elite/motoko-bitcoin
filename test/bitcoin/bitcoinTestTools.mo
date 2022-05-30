@@ -11,12 +11,14 @@ import Debug "mo:base/Debug";
 import Array "mo:base/Array";
 import Nat8 "mo:base/Nat8";
 import Iter "mo:base/Iter";
-
+import Buffer "mo:base/Buffer";
 
 module {
   public type Signature = {r : Nat; s : Nat};
   let curve = Curves.secp256k1;
 
+  // Helper class for generating public key and addresses based on the given
+  // secp256k1 secret key.
   public class Account(_sk : Nat) {
     public let sk : Nat = _sk;
     public let point = Jacobi.toAffine(Jacobi.mulBase(sk, Curves.secp256k1));
@@ -32,10 +34,12 @@ module {
     public let p2pkhAddress = P2pkh.deriveAddress(#Bitcoin, pk);
   };
 
+  // Helper function for operating modulo the curve order.
   func Fr(value : Nat) : Fp.Fp {
     return Fp.Fp(value, curve.r);
   };
 
+  // ECDSA signing for testing transaction signatures.
   public func ecdsaSign(sk : Nat, rand : Nat, message : [Nat8]) : Signature {
     let h = Common.readBE256(Hash.doubleSHA256(message), 0);
     switch(Jacobi.toAffine(Jacobi.mulBase(rand, Curves.secp256k1))) {
@@ -65,11 +69,12 @@ module {
     };
   };
 
+  // Serialize signature to DER format:
+  // 0x30 [total-length] 0x02 [R-length] [R] 0x02 [S-length] [S] [sighash-type]
   public func signatureToDer(signature : Signature,
     sighashType : Types.SighashType) : [Nat8] {
-    // 0x30 [total-length] 0x02 [R-length] [R] 0x02 [S-length] [S] [sighash-type]
 
-    func prepSignatureMember(value : Nat) : ([Nat8], Nat, Nat, Bool) {
+    func prepSignatureMember(value : Nat) : [Nat8] {
       let data = Array.init<Nat8>(32, 0);
       Common.writeBE256(data, 0, value);
       var startOffset = 0;
@@ -80,61 +85,74 @@ module {
           break L;
         };
       };
+      // Prepend zero if most significant bit is set since integers in DER are
+      // signed.
       let prependZero : Bool = data[startOffset] >= 0x80;
       let totalSize = if (prependZero) {
         data.size() - startOffset + 1
       } else {
         data.size() - startOffset
       };
-      return (Array.freeze(data), startOffset, totalSize, prependZero);
+
+      // Return data with zeroes ommitted, except for an initial zero if the
+      // MSB in the first byte is set.
+      return Array.tabulate<Nat8>(totalSize, func (i) {
+        if (prependZero) {
+          if (i == 0) {
+            0x00;
+          } else {
+            data[startOffset + i - 1]
+          };
+        } else {
+          data[startOffset + i]
+        };
+      });
     };
 
-    let (rData, rStartOffset, rTotalSize,
-      rPrependZero) = prepSignatureMember(signature.r);
+    let output = Buffer.Buffer<Nat8>(0);
+    let rData : [Nat8] = prepSignatureMember(signature.r);
+    let sData : [Nat8] = prepSignatureMember(signature.s);
 
-    let (sData, sStartOffset, sTotalSize,
-      sPrependZero) = prepSignatureMember(signature.s);
+    // Add DER identifier.
+    output.add(0x30);
+    // Total size of everything that comes next, excluding sighash type.
+    output.add(Nat8.fromIntWrap(
+      // DER Sequence identifier: 0x02.
+      1
+      // Signature r component size.
+      + 1
+      // Signature r component.
+      + rData.size()
+      // DER Sequence identifier : 0x02.
+      + 1
+      // Signature s component size.
+      + 1
+      // Signature s component.
+      + sData.size()
+    ));
+    // DER sequence identifier.
+    output.add(0x02);
+    // Signature r component size.
+    output.add(Nat8.fromIntWrap(rData.size()));
 
-    let totalSize = 1 + 1 + 1 + 1 + rTotalSize + 1 + 1 + sTotalSize + 1;
-    let output = Array.init<Nat8>(totalSize, 0);
-    var writeOffset = 0;
-
-    output[0] := 0x30;
-    // Total size excluding first bytes, total size byte, and sighash type
-    output[1] := Nat8.fromIntWrap(totalSize - 3);
-    output[2] := 0x02;
-    output[3] := Nat8.fromIntWrap(rTotalSize);
-    writeOffset := 4;
-
-    if (rPrependZero) {
-      output[writeOffset] := 0;
-      writeOffset += 1;
+    // Signature r component.
+    for (i in rData.vals()) {
+      output.add(i);
     };
 
-    let rDataLength = rData.size() - rStartOffset;
-    Common.copy(output, writeOffset, rData, rStartOffset, rDataLength);
-    writeOffset += rDataLength;
+    // DER sequence identifier.
+    output.add(0x02);
+    // Signature s component size.
+    output.add(Nat8.fromIntWrap(sData.size()));
 
-    output[writeOffset] := 0x02;
-    writeOffset += 1;
-
-    output[writeOffset] := Nat8.fromIntWrap(sTotalSize);
-    writeOffset += 1;
-
-    if (sPrependZero) {
-      output[writeOffset] := 0;
-      writeOffset += 1;
+    // Signature s component.
+    for (i in sData.vals()) {
+      output.add(i);
     };
-
-    let sDataLength = sData.size() - sStartOffset;
-    Common.copy(output, writeOffset, sData, sStartOffset, sDataLength);
-    writeOffset += sDataLength;
 
     // sighashtype
-    output[writeOffset] := 0x01;
-    writeOffset += 1;
+    output.add(0x01);
 
-    assert(writeOffset == output.size());
-    return Array.freeze(output);
+    return output.toArray();
   };
 };
