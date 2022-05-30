@@ -1,4 +1,6 @@
 import Transaction "../../src/bitcoin/Transaction";
+import TxInput "../../src/bitcoin/TxInput";
+import TxOutput "../../src/bitcoin/TxOutput";
 import Script "../../src/bitcoin/Script";
 import P2pkh "../../src/bitcoin/P2pkh";
 import Types "../../src/bitcoin/Types";
@@ -6,8 +8,6 @@ import BitcoinTestTools "./bitcoinTestTools";
 import Blob "mo:base/Blob";
 import Debug "mo:base/Debug";
 
-let TxIn = Transaction.TxIn;
-let TxOut = Transaction.TxOut;
 let Account = BitcoinTestTools.Account;
 let ecdsaSign = BitcoinTestTools.ecdsaSign;
 let signatureToDer = BitcoinTestTools.signatureToDer;
@@ -20,7 +20,7 @@ let wallet = {
 
 do {
   // Create Transaction inputs.
-  let txIn1 = TxIn({
+  let txIn1 = TxInput.TxInput({
     txid = Blob.fromArray([
       0x24, 0x5e, 0x2d, 0x1f, 0x87, 0x41, 0x58, 0x36, 0xcb, 0xb7,
       0xb0, 0xbc, 0x84, 0xe4, 0x0f, 0x4c, 0xa1, 0xd2, 0xa8, 0x12,
@@ -29,7 +29,7 @@ do {
     vout = 0
   }, 0xffffffff);
 
-  let txIn2 = TxIn({
+  let txIn2 = TxInput.TxInput({
     txid = Blob.fromArray([
       0x24, 0x5e, 0x2d, 0x1f, 0x87, 0x41, 0x58, 0x36, 0xcb, 0xb7,
       0xb0, 0xbc, 0x84, 0xe4, 0x0f, 0x4c, 0xa1, 0xd2, 0xa8, 0x12,
@@ -52,13 +52,13 @@ do {
   };
 
   // Create Transaction outputs.
-  let txOut = TxOut(
+  let txOut = TxOutput.TxOutput(
     95000,
     script3
   );
 
   // Create transaction from inputs and outputs.
-  let tx = Transaction.Transaction(1, [txIn1, txIn2], [txOut]);
+  let tx = Transaction.Transaction(1, [txIn1, txIn2], [txOut], 0);
 
   // Create sighashes for the different TxIns.
   let sighash0 = tx.createSignatureHash(script2, 0, Types.SIGHASH_ALL);
@@ -83,8 +83,8 @@ do {
   // Create unlocking scripts and plug them to their associated TxIns.
   let scriptSig0 : Script.Script = [#data(sig0Encoded), #data(wallet.account2.pkData)];
   let scriptSig1 = [#data(sig1Encoded), #data(wallet.account1.pkData)];
-  tx.txIns[1].script := scriptSig1;
-  tx.txIns[0].script := scriptSig0;
+  tx.txInputs[1].script := scriptSig1;
+  tx.txInputs[0].script := scriptSig0;
 
   assert(tx.id() == [
     0x36, 0x1f, 0xbb, 0x9d, 0xe4, 0xef, 0x5b, 0xfa, 0x8c, 0x1c, 0xbd, 0x5e,
